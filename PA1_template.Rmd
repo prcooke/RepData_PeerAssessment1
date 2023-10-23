@@ -7,19 +7,230 @@ output:
 
 
 ## Loading and preprocessing the data
+Download the dataset: [Activity monitoring data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip)
 
+* To avoid re-downloading data each time I knit, I am linking the zip file - store within 'data' folder in your working directory.
 
+```{r, cache = TRUE}
+## Date and time of file download from internet:
+Sys.time()
+```
+Required Packages
+```{r}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+```
+Load the data:
+```{r}
+raw_activity <- fread("./data./activity.csv", header = TRUE, na.strings = "NA")
+```
+
+Take a look at the data:
+```{r}
+summary(raw_activity)
+head(raw_activity)
+```
 
 ## What is mean total number of steps taken per day?
 
+### 1. Calculate the total number of steps take per day
 
+```{r}
+table(raw_activity$date)
+```
+
+```{r}
+day_steps <- aggregate(steps ~ date, raw_activity, sum, na.action = NULL)
+day_steps
+```
+
+### 2. Make a histogram of the total number of steps take each day
+
+```{r}
+hist(day_steps$steps, xlab = "Total Steps/Day", main = "Histogram of Total Steps Per Day")
+```
+
+### 3) Calculate and report the mean and median of the total number of steps taken per day
+
+```{r}
+mean(day_steps$steps, na.rm = TRUE)
+median(day_steps$steps,na.rm = TRUE)
+```
 
 ## What is the average daily activity pattern?
 
+### 1) Make a time series plot (i.e. type = "l") of the 5-minute interval (x-axis) and the average number of steps take, averaged across all days (y-axis)
 
+Aggregate the average number of steps by interval:
+
+```{r}
+ave_itv <- aggregate(steps ~ interval, raw_activity, mean)
+summary(ave_itv)
+```
+
+Create th plot
+
+```{r}
+plot(ave_itv, type = "l", main = "Average Steps by Interval")
+```
+
+
+### 2) Which 5-minute interval, on average across all the days in the dataset, contains the maximum number of steps?
+
+```{r}
+itv_max <- which.max(ave_itv$steps)
+ave_itv[itv_max, ]
+```
 
 ## Imputing missing values
 
+### 1) Calculare and report the total number of missing values in the dataset (i.e. the total number of rows with NAs)
 
+```{r}
+na_count <- is.na(raw_activity)
+sum(na_count)
+```
+
+### 2) Devise a strategy for filling in all of the missing values in the dataset. The strategy doesn not need to be sophisticated. For example, you could use the mean/median for that day, or the mean for that 5-minute interval, etc.
+
+Lets see if these NA's are concentrated in any interval or date?
+
+```{r}
+na_steps <- raw_activity
+na_steps$na <- is.na(na_steps$steps)
+head(na_steps)
+```
+
+Plot number of NAs by date
+
+```{r}
+na_dates <- aggregate(na ~ date, na_steps, sum)
+na_itv <- aggregate(na ~ interval, na_steps, sum)
+par(mfrow = c(1, 2))
+plot(na_dates, main = "NA Count by Date")
+plot(na_itv, main = "NA Count by Interval")
+```
+
+Appears as if no data was able to be collected on 8 different dates
+
+* 8 days  are completely missing data - all NAs.
+* Every interval is missing exactly 8 entries 
+
+Found a useful package: mice
+```{r}
+library(mice)
+```
+Lets try 3 different methods imputing the data and compare histograms
+
+* pmm: predictive mean matching
+* cart: classification and regression trees
+* lasso.norm: lasso linear regression
+
+```{r}
+activity_imputed <- data.frame(
+    original = raw_activity$steps,
+    pmm_steps = complete(mice(raw_activity, method = "pmm"))$steps,
+    cart_steps = complete(mice(raw_activity, method = "cart"))$steps,
+    lasso_steps = complete(mice(raw_activity, method = "lasso.norm"))$steps
+)
+summary(activity_imputed)
+```
+
+Visualize the distributions
+
+```{r}
+library(gridExtra)
+og_hist <- ggplot(activity_imputed, aes(x = original)) + geom_histogram() + 
+    ggtitle("Original")
+pmm_hist <- ggplot(activity_imputed, aes(x = pmm_steps)) + geom_histogram() + 
+    ggtitle("pmm")
+cart_hist <- ggplot(activity_imputed, aes(x = cart_steps)) + geom_histogram() + 
+    ggtitle("cart")
+lasso_hist <- ggplot(activity_imputed, aes(x = lasso_steps)) + geom_histogram() + 
+    ggtitle("lasso")
+grid.arrange(og_hist, pmm_hist, cart_hist, lasso_hist, nrow = 2, ncol = 2)
+```
+Looking at these plots:
+
+* Lasso provides negative data, can't have negative steps.
+* Cart and pmm seem to deliver the same product.
+
+Lets use predictive mean matching to impute
+
+### 3. Create a new dataset that is equal to the original dataset but with the missing data filled in
+
+```{r}
+imputed_activity <- data.frame(steps <- activity_imputed$pmm_steps, 
+                               date <- raw_activity$date, 
+                               interval <- raw_activity$interval)
+head(imputed_activity)
+```
+
+### 4. Make a histogram of the total number of steps taken each day and calculatate and report the **mean** and **median** total number of steps taken per day. Do these values differ from the estimates from the first part of the assignment? What is the impact of imputing missing data on the estimates of the total daily number of steps?
+
+Create a new dataframe relaying total steps per day with imputed step counts
+
+```{r}
+names(imputed_activity)
+```
+Yikes, ok fix these names
+
+```{r}
+imputed_activity <- setNames(imputed_activity, c("steps", "date", "interval"))
+names(imputed_activity)
+```
+
+```{r}
+day_steps_imp <- aggregate(steps ~ date, imputed_activity, sum)
+head(day_steps_imp)
+```
+Make the histogram:
+
+```{r}
+hist(day_steps_imp$steps, main = "Total Steps by Day")
+```
+
+Compare mean and medium before and after imputing NA values
+
+```{r}
+mean_raw <- mean(day_steps$steps, na.rm = TRUE)
+median_raw <- median(day_steps$steps,na.rm = TRUE)
+mean_imp <- mean(day_steps_imp$steps)
+median_imp <- median(day_steps_imp$steps)
+comp_matrix <- matrix(nrow = 2, ncol = 2, dimnames = list(c("raw", "imputed"), c("mean", "median")))
+comp_matrix[ , 1] = c(mean_raw, mean_imp)
+comp_matrix[ , 2] = c(median_raw, median_imp)
+comp_matrix
+```
+
+Both the mean and median values were reduced when imputing data based on pmm values.
 
 ## Are there differences in activity patterns between weekdays and weekends?
+
+### 1) Create a new factor variable in the dataset with two levels - "weekday" and "weekend" indicating whether a given date is a weekday or a weekend day.
+
+Create a list relaying days of the week
+```{r}
+day_name <- weekdays(imputed_activity$date, abbreviate = TRUE)
+table(day_name)
+```
+Create a list indicating if the day is a weekend
+
+```{r}
+weekend <- ifelse(day_name %in% c("Sat", "Sun"), TRUE, FALSE)
+class(weekend)
+table(weekend)
+```
+Add that list to the data table
+```{r}
+imputed_activity$weekend <- as.factor(weekend)
+summary(imputed_activity)
+```
+
+### 2. Make a panel plot containing a time series plot (i.e. type = "l") of the 5-minute interval (x-axis) and the average number of steps taken, averaged across all weekday days or weekend days (y-axis)
+
+```{r}
+ggplot(activity_imputed, aes(x = interval, y = steps)) + geom_line() + 
+    facet_grid(rows = weekend)
+```
